@@ -1,0 +1,39 @@
+# run this code to ensure that you have the current functions
+source('Z:/Risk/RBansal/Common R Files/data_fetch.r')
+#source('Z:/Risk/Dan Cashion/R/R Scripts/rCharts Code.r')
+source('Z:/Risk/Dan Cashion/R/R Scripts/rCharts Code with passed Params.R')
+#calendar <- read.csv("//ny-filer1/common_pbr/risk/dan cashion/r/Rcalendar.csv",sep=",",header=T)
+
+
+Mgr.Name    <- "Appelt"
+start.date  <- "01/01/2012"
+ end.date    <- "08/28/2013"
+
+MgrData     <- GetManagerData(Mgr.Name, start.date, end.date)
+
+chart.PnL(Mgr.Name = Mgr.Name)
+
+chart.PnLDistribution()
+
+rtrns   <- MgrData[-1,1]
+risk    <- MgrData[-1,4]
+
+zones <- matrix(c(1,2),nrow=2)
+layout(zones)
+chart.VRiskReturn(rtrns=MgrData[-1,1],risk=MgrData[-1,4],origin.on.x=T)
+RiskReturn.VChart(rtrns=MgrData[-1,1],risk=MgrData[-1,4],origin.on.x=F,main="")
+layout(1)
+RiskReturn.VChart(rtrns,risk,origin.on.x=F)
+chart.ReturnsToRisk()
+layout(1)
+par(mfrow=c(2,1))
+chart.TimeSeries(MgrData[,9],ylab="% Drawdown",col="blue",main ="CNI Drawdown",sub="In Percent",ylim=c(-9,0))
+chart.TimeSeries(MgrData[,10]/1e6,ylab="$ Drawdown",col="red",main ="CNI Drawdown",sub="In Percent")
+
+par(mfrow=c(1,1))
+
+rtrns   <- MgrData[-1,1]
+risk    <- MgrData[-1,4]
+
+#ManagerRegression("sp.cl")
+
