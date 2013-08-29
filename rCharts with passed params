@@ -1,0 +1,534 @@
+
+Latest.End.Date <- function(){
+
+  if (exists(as.character(substitute(calendar)))) 
+            {calendar <- calendar}
+      
+    else 
+            {calendar        <- read.csv("//ny-filer1/common_pbr/risk/dan cashion/r/Rcalendar.csv"
+                                         ,sep=",",header=T,, colClasses="character")
+            } 
+  
+    latestDate      <- as.character(Sys.Date())
+    prevBizDate.row <- which(calendar$calendar_date %in% latestDate)
+    end.date        <- as.Date(calendar[prevBizDate.row,4],format="%Y-%m-%d")
+    return(end.date)
+}
+
+
+Start.Date.Tm1 <- function(start.date){
+
+  if (exists(as.character(substitute(calendar)))) 
+          {calendar <- calendar}
+  
+  else 
+          {calendar        <- read.csv("//ny-filer1/common_pbr/risk/dan cashion/r/Rcalendar.csv"
+                               ,sep=",",header=T,, colClasses="character")
+          } 
+  start.date.2    <- as.Date(start.date,format="%m/%d/%Y")
+  start.date.c    <- as.character(start.date.2)
+  prevBizDate.row <- which(calendar$calendar_date %in% start.date.c)
+  start.date      <- as.Date(calendar[prevBizDate.row,4],format="%Y-%m-%d")
+  return(start.date)
+}
+
+# 1-------------------------------------------------------------------------------------------------------------------------------------------
+
+GetManagerData <- function(Mgr.Name, start.date, end.date=Latest.End.Date()) {
+  
+  #   rm(list=ls(,pattern="Mgr"))
+  #   source('//ny-filer1/Common_PBR/Risk/RBansal/Common R Files/data_fetch.r')
+#           Mgr.Name        = "Jacobs"
+#           start.date      = "07/19/2013"
+#           end.date        = "08/13/2013"
+  #   sample;          MgrData <- GetManagerData("Jacobs","07/19/2013","08/15/2013")  
+  
+  #     This retrieves the prior business day, used to start the cumulative calcs with a value of zero (proper charting)
+  require("RiskFunctions")
+  require("PerformanceAnalytics")
+  
+  start.date.Tm1    <- Start.Date.Tm1(start.date)
+  start.date.int    <- as.character(as.Date(start.date.Tm1[[1]],format="%Y-%m-%d"),format="%Y%m%d")     
+  end.date.int      <- as.character(as.Date(end.date,format="%m/%d/%Y"),format="%Y%m%d")
+  
+  #     --------------------------------------------------------------------------
+  Mgr.pnl.str     <- paste("", Mgr.Name, ".pnl", sep = '')
+  Mgr.alloc.str   <- paste("", Mgr.Name, ".alloc", sep = '')
+  Mgr.90.lstd.str <- paste("", Mgr.Name, ".90.lsstd", sep = '')
+  Mgr.sims.str    <- paste("", Mgr.Name,".",end.date.int,".pl", sep='')
+  
+  Mgr.pnl         <- removeNA(try(GetFameData(dbname="craps",obj=Mgr.pnl.str,sdate=start.date.int,edate=end.date.int,fill.fwd = FALSE,fill.fun = "FillFwd")))
+  Mgr.alloc       <- try(GetFameData(dbname="craps",obj=Mgr.alloc.str,sdate=start.date.int,edate=end.date.int,fill.fun = "FillFwd",fill.fwd = TRUE))
+  Mgr.today.sim   <- try(GetFameData(dbname="craps",obj=Mgr.sims.str,sdate=start.date.int,edate=end.date.int,fill.fwd = TRUE,fill.fun = "FillFwd"))
+  Mgr.rownames    <- as.vector(rownames(Mgr.pnl))
+  Mgr.risk        <- try(GetFameData(dbname="craps",obj=Mgr.90.lstd.str,sdate=start.date.int,edate=end.date.int,fill.fwd = TRUE,fill.fun = "FillFwd"))
+  Mgr.risk        <- lag(Mgr.risk,k=1)      # as risk is projected onto the next day's return
+  
+  Mgr.pnl[1]      <- 0   # setting first obs to zero
+  Mgr.today.sim[1]  <- 0
+  
+  colnames(Mgr.risk) <- "LSTD"
+  colnames(Mgr.pnl)   <- "P&L"
+  colnames(Mgr.alloc) <- "Alloc"
+  colnames(Mgr.today.sim) <- "Tm1Sims"
+  
+  Mgr.CumSum          <- as.timeSeries(cumsum(Mgr.pnl[,1]),Mgr.rownames)
+  colnames(Mgr.CumSum)<- "Cumulative"
+  Mgr.ts              <- cbind(Mgr.pnl,Mgr.CumSum)      
+  Mgr.ts              <- removeNA(cbind(x=Mgr.ts,y=Mgr.alloc))
+  Mgr.ts              <- cbind(Mgr.ts,Mgr.risk[rownames(Mgr.ts),])
+  colnames(Mgr.ts)    <- c("PnL","Cumulative","Alloc","LSTD")     
+  
+  Mgr.rownames        <- as.vector(rownames(Mgr.ts))
+  Mgr.ts              <- as.timeSeries(cbind(Mgr.ts,Mgr.today.sim[rownames(Mgr.ts),]),Mgr.rownames)      
+  Mgr.Pct.ret         <- as.timeSeries(as.vector(round(Mgr.ts$PnL/(Mgr.ts$Alloc * 10000),6)),Mgr.rownames)
+  colnames(Mgr.Pct.ret) <- "DailyRetPct"
+  Mgr.Pct.risk         <- as.timeSeries(as.vector(round(Mgr.ts$LSTD/(Mgr.ts$Alloc * 10000),6)),Mgr.rownames)
+  colnames(Mgr.Pct.risk) <- "LSTDRiskPct"
+  Mgr.Pct.ret.cum     <- as.timeSeries(colCumprods(1+(Mgr.Pct.ret/1e2)),Mgr.rownames)
+  Mgr.Pct.ret.cum.ts  <- as.timeSeries(((Mgr.Pct.ret.cum)-1)*100,Mgr.rownames)
+  colnames(Mgr.Pct.ret.cum.ts)  <- "CumReturnPct"  
+  
+  Mgr.ts              <- as.timeSeries(cbind(Mgr.ts,Mgr.Pct.ret,Mgr.Pct.risk,Mgr.Pct.ret.cum.ts),Mgr.rownames)
+  Mgr.PctDdown        <- as.timeSeries(drawdowns(Mgr.ts[,6]/1e2,geometric=TRUE)*1e2,Mgr.rownames)
+  Mgr.DolDdown        <- as.timeSeries(as.vector(Mgr.ts$Cumulative - cummax(Mgr.ts$Cumulative))  ,Mgr.rownames)    
+  colnames(Mgr.PctDdown) <- "PctDDown"
+  colnames(Mgr.DolDdown) <- "DollarDdown"
+  Mgr.ts              <- as.timeSeries(cbind(Mgr.ts,Mgr.PctDdown,Mgr.DolDdown),Mgr.rownames)
+ # Mgr.ts$Mgr.Name     <- Mgr.Name
+  return(Mgr.ts)      
+}
+
+#----------------------------------------------------------------------------------------------------
+
+
+chart.PnL <- function(Mgr.Name,...) {
+
+#   rm(list=ls(,pattern="Mgr"))
+#   source('//ny-filer1/rbansal/rcode/packages/src/processing_financial_data_functions/R/data_fetch.r')
+#   Mgr.Name        = "Yablon"
+#   start.date      = "01/03/2013"
+#   end.date        = "08/09/2013"
+#   sample;    PnLChart("Yablon","01/03/2013","20130806")  
+#   latestDate <- as.factor(Sys.Date())
+#   MgrData <- GetManagerData(Mgr.Name, start.date, end.date) 
+  colorset        = c("lightgray", "#00008F", "#005AFF", "#23FFDC", "#ECFF13", "#cdd4e9", "#dee4fa")  #color setup
+
+MgrData.pnl      <- MgrData[,1]/1e6
+colnames(MgrData.pnl)   <- "DailyPnL"
+Mgr.df          <- as.data.frame(na.omit(MgrData.pnl[,1]))
+Mgr.df$Up       <- ifelse(Mgr.df[,1] >= 0, Mgr.df[,1],NA)
+Mgr.df$Down     <- ifelse(Mgr.df[,1] < 0, Mgr.df[,1],NA)
+colnames(Mgr.df) <- c("Daily","Up","Down")      # ensuring column names
+Mgr.date        <- as.Date(rownames(Mgr.df),format="%Y-%m-%d")
+MgrData.pnl           <- as.timeSeries(Mgr.df,date)
+ 
+#     --------------------------------------------------------------------------
+#     Axis specifications
+Mgr.dailymax    <- max(max(MgrData$PnL),abs(min(MgrData$PnL)))/1e6 #used to set symetric axes
+Mgr.CumMax      <- (max(MgrData$Cumulative))/1e6
+Mgr.CumMin      <- (min(MgrData$Cumulative))/1e6
+Mgr.CumBig      <- max(Mgr.CumMax,abs(Mgr.CumMin))
+Mgr.dailyrange  <- pretty(c(Mgr.dailymax * -1, Mgr.dailymax))   
+Mgr.cumrange    <- pretty(c(Mgr.CumBig  * -1, Mgr.CumBig))
+Mgr.date        <- as.Date(rownames(MgrData),format="%Y-%m-%d")
+Mgr.dates       <- pretty(Mgr.date)
+
+Mgr.UpCount     <- length(na.omit(MgrData.pnl$Up))
+Mgr.DownCount   <- length(na.omit(MgrData.pnl$Down))
+
+#     --------------------------------------------------------------------------
+#     TITLES
+Title.Mgr       <- paste("", Mgr.Name, " P&L Analysis", sep = '')
+Freq.Mgr        <- paste("# of days Up/Down = ", Mgr.UpCount,"/",Mgr.DownCount,
+                         " (",round((Mgr.UpCount/(Mgr.UpCount + Mgr.DownCount))*100,0),"% wins)",sep = '')
+Ratio.Mgr       <- paste("AVG Win to Loss = $", round(mean(na.omit(MgrData.pnl$Up)),2)," / $", abs(round(mean(na.omit(MgrData.pnl$Down)),2)),
+                         " (Ratio of ",round((mean(na.omit(MgrData.pnl$Up))/abs(mean(na.omit(MgrData.pnl$Down))) *100),0),"%)",sep = '')
+
+#     --------------------------------------------------------------------------
+#     AND NOW THE GRAPHS
+par(oma=c(0,0,0,2))   #give me some room on the Z axis
+chart.Bar(as.timeSeries(MgrData.pnl$Up,Mgr.date),col=c(colorset[2]),ylim=c(min(Mgr.dailyrange),max(Mgr.dailyrange)),ylab="Daily P&L $M - Bars", 
+          xlab="", grid.color="lightblue"
+        ,main=Title.Mgr,minor.ticks=T, lwd=2)
+par(new=T)
+chart.Bar(as.timeSeries(MgrData.pnl$Down,Mgr.date),col=colorset[6],ylim=c(min(Mgr.dailyrange),max(Mgr.dailyrange)),xaxis=FALSE,yaxis=FALSE,
+            bg="lightgray",ylab="",main="")
+#axis(2, col="black",cex=.7)
+par(new=T)
+Mgr.Zaxis <- pretty(c(Mgr.CumMax * -1,Mgr.CumMax))
+chart.TimeSeries(as.timeSeries(MgrData$Cumulative/1e6,Mgr.date), auto.grid=FALSE,type="l",col=colorset[3], xaxis=FALSE,yaxis=FALSE,
+                 lty=3,lwd=2,xlab="",ylab="", ylim=c(min(Mgr.cumrange),max(Mgr.cumrange)),main="")
+if(Mgr.CumMax > 0) abline(h=Mgr.CumMax, lty=3,col=colorset[3])      # Show Highwater if > 0
+if(Mgr.CumMin < 0) abline(h=Mgr.CumMin, lty=3,col=colorset[3])      # Show Lowwater if < 0
+axis(4, col=colorset[3],at=Mgr.cumrange,ylim=c(min(Mgr.cumrange),max(Mgr.cumrange)))
+mtext("Cumulative ($M)",col="blue",side=4,line=3)
+legend("bottomleft",col=c(colorset[1],colorset[2],colorset[3]),border.lty=0,lty=c(1,1,2),legend=c("Up Day","Down Day","Cumulative"))
+legend("top",legend=Freq.Mgr, cex=.8,border.lty=0)
+legend("bottom",legend=Ratio.Mgr, cex=.8,border.lty=0)
+}
+
+#-------------------------------------------------------------------------------------------------------------------------------------------
+
+chart.PnLDistribution <- function() {
+  
+  #   rm(list=ls(,pattern="Mgr"))
+  #   source('//ny-filer1/rbansal/Common R Files/data_fetch.r')
+#    Mgr.Name        = "Kumar"
+#    start.date      = "01/03/2013"
+#    end.date        = "08/05/2013"
+  #  sample;   chart.PnLDistribution("Yablon","01/03/2013","07/10/2013")  
+  #color setup
+  colorset        = c("lightgray", "#00008F", "#005AFF", "#23FFDC", "#ECFF13", "#cdd4e9", "#dee4fa")  #color setup
+  library("PerformanceAnalytics")
+  # plot.new()
+   
+  # MgrData <- GetManagerData(Mgr.Name, start.date, end.date) 
+  #     --------------------------------------------------------------------------
+ 
+  MgrData.ts      <- MgrData[,1]/1e6
+  colnames(MgrData.ts)   <- "DailyPnL"
+  Mgr.df          <- as.data.frame(na.omit(MgrData.ts[,1]))
+  Mgr.df$Up       <- ifelse(Mgr.df[,1] >= 0, Mgr.df[,1],NA)
+  Mgr.df$Down     <- ifelse(Mgr.df[,1] < 0, Mgr.df[,1],NA)
+  colnames(Mgr.df) <- c("Daily","Up","Down")      # ensuring column names
+  Mgr.date        <- as.Date(rownames(Mgr.df),format="%Y-%m-%d")
+  Mgr.ts          <- as.timeSeries(Mgr.df,date)
+  #     --------------------------------------------------------------------------
+  Mgr.Dailymax    <- max(max(Mgr.df$Daily),abs(min(Mgr.df$Daily)))
+  Mgr.UpMax       <- max(na.omit(Mgr.df$Up))
+  Mgr.DownMax     <- min(na.omit(Mgr.df$Down))
+  Mgr.UpAvg       <- last(ave(na.omit(Mgr.df$Up)))
+  Mgr.DownAvg     <- last(ave(na.omit(Mgr.df$Down)))
+  Mgr.Avg         <- last(ave(na.omit(Mgr.df$Daily)))
+   
+  Mgr.dailyrange  <- pretty(c(Mgr.Dailymax * -1, Mgr.Dailymax))
+  Mgr.Uprange     <- pretty(c(0, Mgr.UpMax))
+  Mgr.Downrange   <- pretty(c(Mgr.DownMax,0))   
+  Mgr.dates       <- pretty(Mgr.date)
+  Mgr.UpCount     <- length(na.omit(Mgr.ts$Up))
+  Mgr.DownCount   <- length(na.omit(Mgr.ts$Down))
+  #     --------------------------------------------------------------------------
+  Title.Mgr       <- paste("", Mgr.Name, " P&L Density Histogram", sep = '')
+  Freq.Mgr.Up     <- paste("# of days up = ", Mgr.UpCount,
+                           " (",round((Mgr.UpCount/(Mgr.UpCount + Mgr.DownCount))*100,0),"% wins)",sep = '')
+  
+  Freq.Mgr.Down   <- paste("# of days down = ", Mgr.DownCount,
+                            " (",round((Mgr.DownCount/(Mgr.UpCount + Mgr.DownCount))*100,0),"% losses)",sep = '')
+  Mgr.Up.txt      <- paste("AVG Gain = $", round(Mgr.UpAvg,1),sep = '')
+  Mgr.Down.txt    <- paste("AVG Loss = $", round(Mgr.DownAvg,1),sep = '')
+  Mgr.Avg.txt     <- paste("Mean = $", round(Mgr.Avg,2),sep = '')
+  
+  
+  Mgr.den         <- density(Mgr.ts$Daily,n=length(Mgr.ts$Daily))
+  Mgr.Den.y.hat   <- max(hist(Mgr.ts$Daily, breaks = 30, plot = FALSE)$density)
+  Mgr.Cnt.y.hat   <- max(hist(Mgr.ts$Daily, breaks = 30, plot = FALSE)$count)
+  Mgr.Den.y       <- Mgr.Den.y.hat * 1.1
+  Mgr.hist        <- hist(Mgr.ts$Daily,breaks=30,plot = FALSE)
+  Mgr.max.bin.cnt <- max(Mgr.hist$counts)
+  Mgr.Scale.Ratio <- Mgr.max.bin.cnt/Mgr.Den.y.hat
+  Mgr.New.density <- Mgr.den$y * Mgr.Scale.Ratio
+  Mgt.text.y      <- max(pretty(c(0,Mgr.Cnt.y.hat))) * .75  
+
+  #     --------------------------------------------------------------------------
+  #   And now the graphs
+  chart.Histogram(na.omit(Mgr.ts$Daily),            
+                  xlab="Daily Returns ($M)",
+                  ylab="",
+                  breaks=30, 
+                  #methods=c("add.density"),  #,"add.normal"
+                  lty = c(1,3,3),
+                  yaxis=FALSE,
+                  border.col="white",
+                  xlim=c(Mgr.Dailymax * -1,Mgr.Dailymax),
+                  main=paste(Mgr.Name, " - Daily Returns Density Histogram")
+                  )
+   grid(col='lightgray')
+   legend("topleft",legend=Freq.Mgr.Down, bty="o",cex=.8,border.lty=1, box.col ="gray")
+   legend("topright",legend=Freq.Mgr.Up, cex=.8,border.lty=1, box.col ="gray")
+   abline(v=Mgr.DownAvg,lty=2,col="red")
+   text(x=Mgr.DownAvg, y=Mgt.text.y,label=Mgr.Down.txt,cex=.8,srt=90,pos=3,offset=1,col="red")
+   abline(v=Mgr.UpAvg,lty=2,col="blue")
+   text(x=Mgr.UpAvg, y=Mgt.text.y,label=Mgr.Up.txt,cex=.8,srt=90,pos=3,offset=1,col="blue")
+   abline(v=Mgr.Avg,lty=3,col="slateblue")
+   text(x=Mgr.Avg, y=Mgt.text.y,label=Mgr.Avg.txt,cex=.8,srt=90,pos=3,offset=1,col="slateblue")
+   abline(v=0,lty=1, col="black")
+   lines(x=Mgr.den$x,y=Mgr.New.density,col = "#778899", lty=1,lwd = 2)
+   lines(x=Mgr.den$x,y=Mgr.New.density,col = "red", lty=2,lwd = 2)
+   axis(2, col="black",at=pretty(c(0,Mgr.Cnt.y.hat)),ylim=c(0,Mgr.Cnt.y.hat),cex=.6)
+}
+  
+#-------------------------------------------------------------------------------------------------------------------------------------------
+
+
+chart.ReturnsToRisk <- function() {
+  
+  #   rm(list=ls(,pattern="mgr"))
+  #   source('//ny-filer1/rbansal/rcode/packages/src/processing_financial_data_functions/R/data_fetch.r')
+#     Mgr.Name        = "Aaboe"
+#     start.date      = "01/01/2013"
+#     end.date        = "08/02/2013"
+  #  sample;          chart.ReturnsToRisk()
+  
+  colorset        = c("lightgray", "#00008F", "#005AFF", "#23FFDC", "#ECFF13", "#cdd4e9", "#dee4fa")  #color setup
+  library("PerformanceAnalytics")
+
+  
+  #     --------------------------------------------------------------------------
+  
+  Title           <- paste("", first(MgrData$Mgr.Name), " P&L (bars) vs T-1 Risk (lines) Analysis ", sep = '')
+  Max.PnL         <- max(max(na.omit(MgrData$PnL),abs(min(na.omit(MgrData$PnL)))))/1e6
+  
+  TotalObs        <- length(na.omit(MgrData$PnL))
+  UpViolations    <- sum(na.omit(ifelse(MgrData$PnL > 0 & (MgrData$PnL > MgrData$LSTD),1,0)))
+  DownViolations  <- sum(na.omit(ifelse(MgrData$PnL < 0 & (abs(MgrData$PnL) > MgrData$LSTD),1,0)))
+  LargeDown       <- sum(na.omit(ifelse(MgrData$PnL < 0 & (abs(MgrData$PnL) > MgrData$LSTD*2),1,0)))                    
+  Violations.Mgr  <- paste("Frequency Analysis: Number of above/below T-1 Risk = ",UpViolations,"/",DownViolations,"      Total Observations = ",TotalObs,sep = '')
+  Violations2.Mgr  <- paste("Exception Summary: ",round(DownViolations/TotalObs*100,1),"% down | ",round(UpViolations/TotalObs*100,1),"% up; "
+                            ,round((UpViolations+DownViolations)/TotalObs*100,1),"% of Total      "
+                            ,round(LargeDown/TotalObs*100,1),"% > -2 LSTDs (count = ",LargeDown,")",sep = '')
+  
+  chart.Bar(MgrData[,1]/1e6, colorset="blue",ylab="($M)",ylim=c(Max.PnL * -1,Max.PnL),main=Title,xlab="")
+  par(new=T)
+  plot(MgrData[,4]/1e6,ylim=c(Max.PnL * -1,Max.PnL),col= colorset[3],ylab="",xlab="", axes=F)
+  par(new=T)
+  plot(MgrData[,4]/-1e6,ylim=c(Max.PnL * -1,Max.PnL),col= colorset[3],ylab="",xlab="",axes=F)
+  par(new=T)
+  legend("top",legend=Violations.Mgr, cex=.8,border.lty=2, bg=colorset[6])
+  legend("bottom",legend=Violations2.Mgr, cex=.8,border.lty=2,bg=colorset[6])
+}
+
+
+
+#------------------------------------------------------------------------------------------
+
+scatterhist = function(x, y, xlab=colnames(x), ylab=colnames(y))
+{
+  zones   <- matrix(c(2,0,1,3), ncol=2, byrow=TRUE)  
+  layout(zones, widths=c(6/7,1/7), heights=c(1/7,6/7))  
+  xmax    <- ceiling(max(max(x),abs(min(x))))
+  ymax    <- ceiling(max(max(y),abs(min(y))))
+  xbreaks <- pretty(c(xmax *-1,xmax),n=20)
+  ybreaks <- pretty(c(ymax *-1,ymax),n=20)
+  xhist   <- hist(x, breaks = xbreaks,plot=FALSE)  
+  yhist   <- hist(y, breaks = ybreaks,plot=FALSE)  
+  axis.max <- 1
+  top     <- max(c(xhist$counts, yhist$counts))  
+
+  par(mar=c(3,3,0,0))  
+  fit.rob <- rlm(y~x)
+  fit.ls  <- lm(y~x)
+  plot(x,y, col="#778899",pch="+", bty="n",axes=F,
+       xlim=c(xmax*-1,xmax),ylim=c(ymax*-1,ymax))
+  legend("bottomleft",col=c(colorset[1],colorset[2],colorset[3]),text.col="#7AA9DD",border.lty=0,legend=paste("Dates: ",first(rownames(x))," to ",last(rownames(x)),sep=''))
+    
+  xlims  <- pretty(c(xmax *-1,xmax))
+  axis(1,pretty(c(xmax *-1,xmax),n=10),cex.axis=.8)
+  axis(2,pretty(c(ymax *-1,ymax),n=10),cex.axis=.8)
+  fit.rob <- rlm(y~x)
+  fit.ls  <- lm(y~x)
+  #  abline(fit.rob, col="#708090",lty=2,lwd=2)   # I (Dan) perfer robust, but I know that most don't
+  abline(fit.ls, col="red",lty=2,lwd=2)
+  abline(h=0, col="black")
+  abline(v=0, col="black")  
+  legend("topright",col=c(colorset[1],colorset[2],colorset[3]),text.col="#7AA9DD",border.lty=0,legend=paste("Hist Sim Beta = ",round(fit.ls$coefficients[[2]],2),sep=''))
+  
+  #grid(nx=10,y=10)
+  par(mar=c(0,3,1,1))  
+  barplot(xhist$counts, ylim=c(0, top),# axes=FALSE,
+          , space=0, col="#7AA9DD",border="white",axes=F)
+  axis(2, col="#7AA9DD", col.ticks="#7AA9DD", col.axis="#7AA9DD", cex.axis=.8)
+  #abline(h=0)
+  #abline(v=0, lty=2, col="gray")
+  par(mar=c(3,0,1,1))  
+  barplot(yhist$counts, xlim=c(0, top), #axes=FALSE, 
+          space=0, horiz=TRUE,col="#7AA9DD",border = "white",axes=FALSE)  
+  axis(1, col="#7AA9DD", col.ticks="#7AA9DD", col.axis="#7AA9DD", cex.axis=.8)
+  #abline(v=0)
+  par(oma=c(3,3,0,0))  
+  mtext(xlab, side=1, line=1, outer=TRUE, adj=0, at=(.70 * (mean(x) - min(x))/(max(x)-min(x)))) 
+  mtext(ylab, side=2, line=1, outer=TRUE, adj=0, at=(.95 * (mean(y) - min(y))/(max(y) - min(y))))
+  par(mai=c(1,1,.5,.5)) 
+}
+
+#---------------------------------------------------------------------------------------------------
+# The "VCHART"
+
+chart.VRiskReturn <- function(rtrns,risk,origin.on.x=TRUE,main="Returns to Risks Taken") {
+
+    if ((is.timeSeries(rtrns) && is.timeSeries(risk)) && (length(rtrns) = length(risk)))
+    {                
+      temp.df <- as.data.frame(removeNA(merge(rtrns,risk)))     #merge the two timeseries, remove NAs, and create a dataframe
+      temp.df$up    <- ifelse(temp.df[,1] > 0, temp.df[,1]/1e6, NA)
+      temp.df$down  <- ifelse(temp.df[,1] < 0, temp.df[,1]/1e6, NA)
+      risk.1m <- risk/1e6
+      up.lm   <- lm(risk.1m~temp.df$up-1)                          # regressions with zero being the intercept
+      down.lm <- lm(risk.1m~temp.df$down-1)
+      risk    <- temp.df[,2]/1e6
+      ylimit  <- ceiling(max(risk))
+      xlimit  <- ceiling(max(max(removeNA(temp.df$up),abs(min(removeNA(temp.df$down))))))
+      axes.lim <- max(ylimit,xlimit)
+      #opar    <- par()
+      #par(mai=c(1,1,.5,.5)) 
+    
+      # originates on X axis
+        if (origin.on.x==TRUE) { 
+          plot(temp.df$up,risk,col="blue",pch=20,xlim=c(axes.lim * -1,axes.lim),
+               ylim=c(0,axes.lim),ylab="",xlab=""
+               #xlab="Daily Returns ($M)",ylab="T-1 Risk ($M)"
+               ,add=rect(par("usr")[1],par("usr")[3],par("usr")[2],par("usr")[4],col ="#F8F8F8"),frame.plot=FALSE,cex=.8,cex.axis=.8,
+               main = main
+               )
+          rug(temp.df$up,col="blue")
+          abline(up.lm,col="blue",lty=2)
+          abline(coef=c(0,1))
+          mtext("Daily Returns ($M)", side=1, outer=T)
+          mtext ("T-1 Risk ($M)",side = 2,outer=T)
+          par(new=T)
+          plot(temp.df$down,risk,col="slategray",pch=20,xlim=c(axes.lim * -1,axes.lim),
+               ylim=c(0,axes.lim),
+               axes=F,xlab="",ylab="")
+          rug(temp.df$down,col="slategray")
+          abline(down.lm,col="slategray",lty=2)
+          abline(coef=c(0,-1))
+          grid(col="#99AFC8")}
+  
+    # originates on Y axis
+        if (origin.on.x==FALSE){
+          plot(risk,temp.df$up,col="blue",pch=20,ylim=c(axes.lim * -1,axes.lim),
+               xlim=c(0,axes.lim), ylab="",xlab=""
+               #ylab="Daily Returns ($M)",xlab="T-1 Risk ($M)"
+               ,add=rect(par("usr")[1],par("usr")[3],par("usr")[2],par("usr")[4],col ="#F8F8F8"),frame.plot=FALSE,cex=.8,cex.axis=.8,
+               main = main
+               )
+          rug(temp.df$up,col="blue")
+          abline(up.lm,col="blue",lty=2)
+          abline(coef=c(0,1))
+          par(new=T)
+          plot(risk,temp.df$down,col="slategray",pch=20,ylim=c(axes.lim * -1,axes.lim),
+               xlim=c(0,axes.lim),
+               axes=F,xlab="",ylab="")
+          rug(down*-1,col="slategray")
+          abline(down.lm,col="slategray",lty=2)
+          abline(coef=c(0,-1))
+          grid(col="#99AFC8")}
+      }
+    else  {stop("The two series both need to be time-series")}
+    
+}
+
+# 4-------------------------------------------------------------------------------------------------------------------------------------------
+
+ManagerRegression <- function(Index) {
+  
+  #   rm(list=ls(,pattern="Mgr"))
+  #   source('//ny-filer1/rbansal/rcode/packages/src/processing_financial_data_functions/R/data_fetch.r')
+#           Mgr.Name        = "Tung"
+#           start.date      = "03/01/2012"
+#           end.date        = "08/02/2013"
+          
+#           start.date      = first(rownames(MgrData))
+#           end.date        = last(rownames(MgrData))
+          Index           = "sp.cl"
+  #  sample;          ManagerReturns("Grover","MXAP Index","11/01/2012","07/23/2013")  
+  
+  colorset        = c("lightgray", "#00008F", "#005AFF", "#23FFDC", "#ECFF13", "#cdd4e9", "#dee4fa")  #color setup
+  require("PerformanceAnalytics")
+
+  start.date.int  <- as.character(as.Date(start.date,format="%Y-%m-%d"),format="%Y%m%d")
+  end.date.int    <- as.character(as.Date(end.date,format="%Y-%m-%d"),format="%Y%m%d")
+  
+  #     --------------------------------------------------------------------------
+
+  index.Mgr       <- paste("", Index,sep = '')
+  Mgr.pnl         <- MgrData[,1]
+  Mgr.Alloc       <- MgrData[,3]
+  Mgr.today.sim   <- MgrData[,5]
+  Mgr.Index       <- try(GetFameData(dbname="cash",obj=index.Mgr,sdate=start.date.int,edate=end.date.int,fill.fwd = TRUE,fill.fun = "FillFwd"))
+  Mgr.Index.ret   <- cbind(Mgr.Index,returns(Mgr.Index,percentage = T))
+  period.loc      <- as.numeric(lapply(strsplit(Index, ''), function(x) which(x == '.')))
+  Index.title     <- substr(Index,1,period.loc-1)
+
+  period.loc       <- as.numeric(lapply(strsplit(Index, ''), function(x) which(x == '.')))
+  Index.title      <- substr(Index,1,period.loc-1)
+  Index.title      <- ifelse(Index.title == "sp", "S&P",Index.title)
+  colnames(Mgr.Index.ret)       <- c(paste(Index.title, "Level",sep=""),paste(Index.title,"PctRet",sep=""))
+    
+#   colnames(Mgr.Index) <- Index.title
+#   #Mgr.Index        <- cbind(Mgr.Index,Mgr.Index.ret)
+#   colnames(Mgr.Index) <- paste(Index.title,"Pct",sep="")       
+  Mgr.rownames        <- as.vector(rownames(MgrData))
+          
+  Mgr.Sims.Pct     <- as.timeSeries(as.vector(round(MgrData$Tm1Sims/(MgrData$Alloc * 10000),6)),Mgr.rownames)
+  
+  Mgr.rownames     <- as.vector(rownames(Mgr.ts))
+  Mgr.curr.alloc   <- last(Mgr.ts$Alloc)
+  
+  Mgr.ts           <- as.timeSeries(cbind(Mgr.ts, Mgr.ts$PnL/(Mgr.ts$Alloc * 10000), Mgr.ts$Sims/(rep(Mgr.curr.alloc) * 1e4)),as.vector(Mgr.rownames))
+  colnames(Mgr.ts) <- c("PnL","Alloc","Sims","RealPctPnL","SimPctPnL")
+  
+  g <- last(Mgr.ts,n=90)
+  
+  MgrSeries       <- cbind(MgrData,Mgr.Index.ret[Mgr.rownames,])
+  x <- MgrSeries[-1,11]
+  y <- MgrSeries[-1,6]
+
+          
+  scatterhist(x,y,xlab=paste(Index.title," Daily Returns (%)",sep=""),ylab=paste(Mgr.Name, " Daily Returns (%)",sep=""))
+
+  data <- RollingNDBeta(x,y,rolling.period = 60,return.type.dep="Percentage", return.type.indep="Percentage")
+  
+  par(mfrow=c(2,1))
+  par(mari=c(.02,.02,.02,.02))
+  chart.TimeSeries(data[,1],ylab="60D Rolling Beta", col="blue",main="")
+  chart.TimeSeries(data[,2],ylab="60D Rolling Correlation",ylim=c(-1,1), col="red",main="")
+  
+  
+  #library(RBloomberg)
+  #conn <- blpConnect()
+  #Index.df      <- bdh(conn, Index, "PX_LAST", start.date.int, end.date.int)
+  #blpDisconnect(conn)
+  #Index.dates <- as.Date(Index.df[,1],format="%Y-%m-%d")
+   
+}
+
+
+#---------------------------------------------------------------------------------------
+
+verifyData <- function (x, method = c("xts", "zoo", "data.frame", "matrix", 
+                        "vector"), na.rm = TRUE, quiet = TRUE, ...) 
+{
+  method = method[1]
+  switch(method, vector = {
+    if (NCOL(x) > 1) {
+      if (!quiet) warning("The data provided is not a vector or univariate time series.  Used only the first column")
+      x = x[, 1]
+    }
+    if (na.rm) x = na.omit(x)
+    x = as.vector(x)
+  }, matrix = {
+    x = as.matrix(x, ncol = NCOL(x))
+  }, data.frame = {
+    x = as.data.frame(x)
+  }, zoo = {
+    if (inherits(x, what = "zoo")) {
+      x = as.zoo(x)
+    } else {
+      if (class(x) == "matrix" | class(x) == "data.frame") {
+        x = zoo(x, order.by = as.POSIXct(rownames(x)))
+      } else {
+        if (class(x) == "numeric") {
+          if (is.null(names(x))) x = zoo(matrix(x, ncol = NCOL(x))) else x = zoo(matrix(x, 
+                                                                                        ncol = NCOL(x)), order.by = as.POSIXct(names(x)))
+        }
+      }
+    }
+  }, xts = {
+    if (is.xts(x)) return(x)
+    if (!xtsible(x)) if (class(x) == "numeric") {
+      x = zoo(matrix(x, ncol = NCOL(x)))
+      if (!quiet) warning("The data cannot be converted into a time series.  Returning a 'zoo' object. ")
+    } else stop("The data cannot be converted into a time series.  If you are trying to pass in names from a data object with one column, you should use the form 'data[rows, columns, drop = FALSE]'.  Rownames should have standard date formats, such as '1985-03-15'. ") else x = try.xts(x)
+  })
+  return(x)
+}
